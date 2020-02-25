@@ -27,5 +27,8 @@ fn main() {
     }
 
     println!("stepping");
+    console.step();
+
+    println!("stepping");
     console.step()
 }

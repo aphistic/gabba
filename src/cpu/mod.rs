@@ -9,9 +9,10 @@ pub const REG_SP: usize = 13;
 pub const REG_LR: usize = 14;
 pub const REG_PC: usize = 15;
 
-const MODE_SYS: usize = 0;
-const MODE_FIQ: usize = 1;
-const MODE_SVC: usize = 2;
+const MODE_USR: usize = 0;
+const MODE_SYS: usize = 1;
+const MODE_FIQ: usize = 2;
+const MODE_SVC: usize = 3;
 const MODE_ABT: usize = 4;
 const MODE_IRQ: usize = 5;
 const MODE_UND: usize = 6;
@@ -48,12 +49,25 @@ impl ARM7TDMI {
                 let next_pc = (old_pc as i32 + *offset) as u32;
                 self.set_reg(REG_PC, next_pc);
             }
-            opcode::Op::BL(offset) => {
+            opcode::Op::Bl(offset) => {
                 let old_pc = self.get_reg(REG_PC);
                 self.set_reg(REG_LR, old_pc);
 
                 let next_pc = (old_pc as i32 + *offset) as u32;
                 self.set_reg(REG_PC, next_pc);
+            }
+            opcode::Op::Mov(r, shifter_operand) => {
+                let old_pc = self.get_reg(REG_PC);
+
+                // TODO i32 conversion could be broken
+                self.set_reg(*r, *shifter_operand as u32);
+
+                self.set_reg(REG_PC, old_pc + opcode::OP_SIZE as u32);
+            }
+            opcode::Op::Msr(immediate, r, field_flags, operand) => {
+                let old_pc = self.get_reg(REG_PC);
+
+                self.set_reg(REG_PC, old_pc + opcode::OP_SIZE as u32);
             }
             _ => println!("op not implemented: {}", op)
         }
@@ -100,7 +114,7 @@ struct CPUState {
 impl CPUState {
     fn new() -> CPUState {
         CPUState {
-            mode: MODE_SYS,
+            mode: MODE_USR,
             gpreg: [0; 8],
             regbank: [
                 [0; 16],
@@ -117,13 +131,13 @@ impl CPUState {
     }
 
     pub fn reset(&mut self) {
-        self.mode = MODE_SYS;
+        self.mode = MODE_USR;
         self.cpsr = 0;
         for idx in 0..8 {
             self.gpreg[idx] = 0;
         }
 
-        self.reset_mode(MODE_SYS);
+        self.reset_mode(MODE_USR);
         self.reset_mode(MODE_FIQ);
         self.reset_mode(MODE_SVC);
         self.reset_mode(MODE_ABT);
@@ -136,10 +150,10 @@ impl CPUState {
             r if r < 8 => self.gpreg[r] = val,
             r => match r {
                 13 | 14 => self.regbank[self.mode][r] = val,
-                15 => self.regbank[MODE_SYS][15] = val,
+                15 => self.regbank[MODE_USR][15] = val,
                 r => match self.mode {
                     MODE_FIQ => self.regbank[self.mode][r] = val,
-                    _ => self.regbank[MODE_SYS][r] = val,
+                    _ => self.regbank[MODE_USR][r] = val,
                 },
             }
         }
@@ -150,10 +164,10 @@ impl CPUState {
             r if r < 8 => self.gpreg[r],
             _ => match reg {
                 13 | 14 => self.regbank[self.mode][reg],
-                15 => self.regbank[MODE_SYS][15],
+                15 => self.regbank[MODE_USR][15],
                 _ => match self.mode {
                     MODE_FIQ => self.regbank[self.mode][reg],
-                    _ => self.regbank[MODE_SYS][reg],
+                    _ => self.regbank[MODE_USR][reg],
                 }
             }
         }
@@ -168,19 +182,26 @@ impl CPUState {
         self.regbank[mode] = [0; 16];
     }
 
+    fn privileged_mode(&self) -> bool {
+        match self.mode {
+            MODE_USR => false,
+            _ => true
+        }
+    }
+
     fn set_cpsr(&mut self, val: u32) {
         self.cpsr = val;
     }
 
     fn get_spsr(&self) -> u32 {
         match self.mode {
-            MODE_SYS => panic!("get spsr with mode sys"),
+            MODE_USR => panic!("get spsr with mode sys"),
             _ => self.spsr[self.mode],
         }
     }
     fn set_spsr(&mut self, val: u32) {
         match self.mode {
-            MODE_SYS => panic!("set spsr with mode sys"),
+            MODE_USR => panic!("set spsr with mode sys"),
             _ => self.spsr[self.mode] = val,
         }
     }
@@ -206,18 +227,18 @@ r15: {:#x}\
                self.gpreg[1], self.gpreg[5],
                self.gpreg[2], self.gpreg[6],
                self.gpreg[3], self.gpreg[7],
-               self.regbank[MODE_SYS][8], self.regbank[MODE_FIQ][8],
-               self.regbank[MODE_SYS][9], self.regbank[MODE_FIQ][9],
-               self.regbank[MODE_SYS][10], self.regbank[MODE_FIQ][10],
-               self.regbank[MODE_SYS][11], self.regbank[MODE_FIQ][11],
-               self.regbank[MODE_SYS][12], self.regbank[MODE_FIQ][12],
-               self.regbank[MODE_SYS][13], self.regbank[MODE_FIQ][13],
+               self.regbank[MODE_USR][8], self.regbank[MODE_FIQ][8],
+               self.regbank[MODE_USR][9], self.regbank[MODE_FIQ][9],
+               self.regbank[MODE_USR][10], self.regbank[MODE_FIQ][10],
+               self.regbank[MODE_USR][11], self.regbank[MODE_FIQ][11],
+               self.regbank[MODE_USR][12], self.regbank[MODE_FIQ][12],
+               self.regbank[MODE_USR][13], self.regbank[MODE_FIQ][13],
                self.regbank[MODE_SVC][13], self.regbank[MODE_ABT][13],
                self.regbank[MODE_IRQ][13], self.regbank[MODE_UND][13],
-               self.regbank[MODE_SYS][14], self.regbank[MODE_FIQ][14],
+               self.regbank[MODE_USR][14], self.regbank[MODE_FIQ][14],
                self.regbank[MODE_SVC][14], self.regbank[MODE_ABT][14],
                self.regbank[MODE_IRQ][14], self.regbank[MODE_UND][14],
-               self.regbank[MODE_SYS][15],
+               self.regbank[MODE_USR][15],
         )
     }
 }
@@ -230,10 +251,10 @@ mod tests {
         #[test]
         fn get_r_sys() {
             let mut state = CPUState::new();
-            state.set_mode(MODE_SYS);
+            state.set_mode(MODE_USR);
 
             state.gpreg = [1234; 8];
-            state.regbank[MODE_SYS] = [1234; 16];
+            state.regbank[MODE_USR] = [1234; 16];
 
             for reg in 0..16 {
                 assert_eq!(1234, state.get_reg(reg));
@@ -246,7 +267,7 @@ mod tests {
             state.set_mode(MODE_FIQ);
 
             state.gpreg = [1234; 8];
-            state.regbank[MODE_SYS] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1234];
+            state.regbank[MODE_USR] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1234];
             state.regbank[MODE_FIQ] = [0, 0, 0, 0, 0, 0, 0, 0, 1234, 1234, 1234, 1234, 1234, 1234, 1234, 0];
 
             for reg in 0..16 {
@@ -260,7 +281,7 @@ mod tests {
             state.set_mode(MODE_SVC);
 
             state.gpreg = [1234; 8];
-            state.regbank[MODE_SYS] = [0, 0, 0, 0, 0, 0, 0, 0, 1234, 1234, 1234, 1234, 1234, 0, 0, 1234];
+            state.regbank[MODE_USR] = [0, 0, 0, 0, 0, 0, 0, 0, 1234, 1234, 1234, 1234, 1234, 0, 0, 1234];
             state.regbank[MODE_SVC] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1234, 1234, 0];
 
             for reg in 0..16 {
@@ -274,7 +295,7 @@ mod tests {
             state.set_mode(MODE_ABT);
 
             state.gpreg = [1234; 8];
-            state.regbank[MODE_SYS] = [0, 0, 0, 0, 0, 0, 0, 0, 1234, 1234, 1234, 1234, 1234, 0, 0, 1234];
+            state.regbank[MODE_USR] = [0, 0, 0, 0, 0, 0, 0, 0, 1234, 1234, 1234, 1234, 1234, 0, 0, 1234];
             state.regbank[MODE_ABT] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1234, 1234, 0];
 
             for reg in 0..16 {
@@ -288,7 +309,7 @@ mod tests {
             state.set_mode(MODE_IRQ);
 
             state.gpreg = [1234; 8];
-            state.regbank[MODE_SYS] = [0, 0, 0, 0, 0, 0, 0, 0, 1234, 1234, 1234, 1234, 1234, 0, 0, 1234];
+            state.regbank[MODE_USR] = [0, 0, 0, 0, 0, 0, 0, 0, 1234, 1234, 1234, 1234, 1234, 0, 0, 1234];
             state.regbank[MODE_IRQ] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1234, 1234, 0];
 
             for reg in 0..16 {
@@ -302,7 +323,7 @@ mod tests {
             state.set_mode(MODE_UND);
 
             state.gpreg = [1234; 8];
-            state.regbank[MODE_SYS] = [0, 0, 0, 0, 0, 0, 0, 0, 1234, 1234, 1234, 1234, 1234, 0, 0, 1234];
+            state.regbank[MODE_USR] = [0, 0, 0, 0, 0, 0, 0, 0, 1234, 1234, 1234, 1234, 1234, 0, 0, 1234];
             state.regbank[MODE_UND] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1234, 1234, 0];
 
             for reg in 0..16 {
@@ -363,13 +384,13 @@ mod tests {
         #[test]
         fn set_r_sys() {
             let mut state = CPUState::new();
-            state.set_mode(MODE_SYS);
+            state.set_mode(MODE_USR);
 
             for reg in 0..16 {
                 state.set_reg(reg, 1234);
                 match reg {
                     0..=7 => assert_eq!(1234, state.gpreg[reg]),
-                    _ => assert_eq!(1234, state.regbank[MODE_SYS][reg]),
+                    _ => assert_eq!(1234, state.regbank[MODE_USR][reg]),
                 }
             }
         }
@@ -386,7 +407,7 @@ mod tests {
                     0..=7 => assert_eq!(1234, state.gpreg[reg]),
                     _ => match reg {
                         8..=14 => assert_eq!(1234, state.regbank[MODE_FIQ][reg]),
-                        _ => assert_eq!(1234, state.regbank[MODE_SYS][reg]),
+                        _ => assert_eq!(1234, state.regbank[MODE_USR][reg]),
                     }
                 }
             }
@@ -403,9 +424,9 @@ mod tests {
                 match reg {
                     0..=7 => assert_eq!(1234, state.gpreg[reg]),
                     _ => match reg {
-                        8..=12 => assert_eq!(1234, state.regbank[MODE_SYS][reg]),
+                        8..=12 => assert_eq!(1234, state.regbank[MODE_USR][reg]),
                         13..=14 => assert_eq!(1234, state.regbank[MODE_SVC][reg]),
-                        _15 => assert_eq!(1234, state.regbank[MODE_SYS][reg]),
+                        _15 => assert_eq!(1234, state.regbank[MODE_USR][reg]),
                     }
                 }
             }
@@ -422,9 +443,9 @@ mod tests {
                 match reg {
                     0..=7 => assert_eq!(1234, state.gpreg[reg]),
                     _ => match reg {
-                        8..=12 => assert_eq!(1234, state.regbank[MODE_SYS][reg]),
+                        8..=12 => assert_eq!(1234, state.regbank[MODE_USR][reg]),
                         13..=14 => assert_eq!(1234, state.regbank[MODE_ABT][reg]),
-                        _15 => assert_eq!(1234, state.regbank[MODE_SYS][reg]),
+                        _15 => assert_eq!(1234, state.regbank[MODE_USR][reg]),
                     }
                 }
             }
@@ -441,9 +462,9 @@ mod tests {
                 match reg {
                     0..=7 => assert_eq!(1234, state.gpreg[reg]),
                     _ => match reg {
-                        8..=12 => assert_eq!(1234, state.regbank[MODE_SYS][reg]),
+                        8..=12 => assert_eq!(1234, state.regbank[MODE_USR][reg]),
                         13..=14 => assert_eq!(1234, state.regbank[MODE_IRQ][reg]),
-                        _15 => assert_eq!(1234, state.regbank[MODE_SYS][reg]),
+                        _15 => assert_eq!(1234, state.regbank[MODE_USR][reg]),
                     }
                 }
             }
@@ -460,9 +481,9 @@ mod tests {
                 match reg {
                     0..=7 => assert_eq!(1234, state.gpreg[reg]),
                     _ => match reg {
-                        8..=12 => assert_eq!(1234, state.regbank[MODE_SYS][reg]),
+                        8..=12 => assert_eq!(1234, state.regbank[MODE_USR][reg]),
                         13..=14 => assert_eq!(1234, state.regbank[MODE_UND][reg]),
-                        _15 => assert_eq!(1234, state.regbank[MODE_SYS][reg]),
+                        _15 => assert_eq!(1234, state.regbank[MODE_USR][reg]),
                     }
                 }
             }
@@ -563,7 +584,7 @@ mod tests {
                 assert_eq!(0x50_00, cpu.get_reg(REG_PC));
                 assert_eq!(0, cpu.get_reg(REG_LR));
 
-                cpu.exec_op(&mem::Memory::new(), &opcode::Op::BL(0x32));
+                cpu.exec_op(&mem::Memory::new(), &opcode::Op::Bl(0x32));
 
                 let new_state = cpu.state();
                 assert_eq!(0x50_32, cpu.get_reg(REG_PC));
@@ -579,11 +600,29 @@ mod tests {
                 assert_eq!(0x50_00, cpu.get_reg(REG_PC));
                 assert_eq!(0, cpu.get_reg(REG_LR));
 
-                cpu.exec_op(&mem::Memory::new(), &opcode::Op::BL(-0x32));
+                cpu.exec_op(&mem::Memory::new(), &opcode::Op::Bl(-0x32));
 
                 let new_state = cpu.state();
                 assert_eq!(0x4F_CE, cpu.get_reg(REG_PC));
                 assert_eq!(0x50_00, cpu.get_reg(REG_LR));
+            }
+        }
+
+        mod mov {
+            use super::super::super::*;
+
+            #[test]
+            fn exec() {
+                let mut cpu = ARM7TDMI::new();
+                cpu.set_reg(REG_PC, 0x50_00);
+
+                let old_state = cpu.state();
+                assert_eq!(0, cpu.get_reg(0));
+
+                cpu.exec_op(&mem::Memory::new(), &opcode::Op::Mov(0, 0x12));
+
+                assert_eq!(0x50_04, cpu.get_reg(REG_PC));
+                assert_eq!(0x12, cpu.get_reg(0));
             }
         }
     }
